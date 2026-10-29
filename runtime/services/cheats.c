@@ -23,6 +23,17 @@
 //   +0x20 value (count or durability), +0x24 equipped, +0x30 the name's characters (FixedSafeString<64> at +0x28).
 // - ksys::gdt::Manager [0x7001e3b088]: +0xbe0 TriggerParam **; TriggerParam +0x18 its s32 flags (PtrArray: count, then
 //   the pointers at +0x20); FlagS32 +0x18 value, +0x1c crc32 of the name (as getS32ByKey 0x7001137684 reads them).
+//
+// Movement: Link is moved by shifting every copy of his position by the same amount: PlayerInfo +0x88 / +0x94, the
+// player actor's ksys::act::Actor fields (decompilation layout, which 1.9.0 keeps: its generic getLife is +0x848, right
+// after the 0x840 bytes of Actor) - mMtx +0x398 and *mPhysicsMtx +0x3c8 (their translations), the previous positions
+// from +0x430 - and the physics: mMainBody +0x190 (phys::RigidBody) and the objects it points to (its hkpRigidBody),
+// where every 16-byte aligned vector within 3 m of Link moves with him (position, centre of mass, swept transform).
+// - Teleport: up to 3 saved places; Link is held at the place for 20 frames (longer, he would gather the speed of a
+//   fall while held, and land hard).
+// - Speed: each frame, the way Link went since the frame before (sideways, and upwards - never down, which would only
+//   make falls faster) is added again (multiplier - 1) times.
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -165,6 +176,93 @@ static bool arrow_item(uint64_t item, void *ctx) {
     return true;
 }
 
+volatile int g_cheat_save_slot = -1, g_cheat_go_slot = -1;  // (menu requests, done next frame)
+volatile bool g_cheat_slot_set[3];
+volatile float g_cheat_speed = 1;
+static float slots[3][3];
+
+static bool near3(const float *v, const float *p, float r) {
+    float dx = v[0] - p[0], dy = v[1] - p[1], dz = v[2] - p[2];
+    return isfinite(dx) && isfinite(dy) && isfinite(dz) && dx * dx + dy * dy + dz * dz < r * r;
+}
+
+static void add3(float *v, const float *d) { v[0] += d[0], v[1] += d[1], v[2] += d[2]; }
+
+// Every vector within 3 m of p in [a, a + n), `align` bytes apart, moved by d
+static void shift_near(uint64_t a, uint64_t n, uint64_t align, const float *p, const float *d) {
+    if (!mem_ok(a, n)) return;
+    for (uint64_t o = 0; o + 12 <= n; o += align) {
+        float *v = (float *)(uintptr_t)(a + o);
+        if (near3(v, p, 3)) add3(v, d);
+    }
+}
+
+static void shift_mtx(uint64_t m, const float *p, const float *d) {  // (sead::Matrix34f: translation at +0xc/+0x1c/+0x2c)
+    if (!mem_ok(m, 0x30)) return;
+    float *t[3] = {&VF(float, m, 0xc), &VF(float, m, 0x1c), &VF(float, m, 0x2c)};
+    float v[3] = {*t[0], *t[1], *t[2]};
+    if (!near3(v, p, 3)) return;
+    for (int i = 0; i < 3; i++) *t[i] += d[i];
+}
+
+// Link moved by d (pinfo: PlayerInfo)
+static void move_link(uint64_t pinfo, const float *d) {
+    float *pos = &VF(float, pinfo, 0x88);
+    float p[3] = {pos[0], pos[1], pos[2]};
+    if (!isfinite(p[0]) || !isfinite(p[1]) || !isfinite(p[2])) return;
+    uint64_t actor = VF(uint64_t, pinfo, 0x60);
+    if (!mem_ok(actor, 0x4d0)) return;
+    shift_mtx(actor + 0x398, p, d);
+    uint64_t pm = VF(uint64_t, actor, 0x3c8);
+    if (pm && pm != actor + 0x398) shift_mtx(pm, p, d);
+    shift_near(actor + 0x430, 0x9c, 4, p, d);  // (the previous positions)
+    uint64_t rb = VF(uint64_t, actor, 0x190);
+    if (mem_ok(rb, 0xd0)) {
+        shift_near(rb, 0xd0, 16, p, d);
+        for (uint64_t o = 0; o < 0xd0; o += 8) {
+            uint64_t q = VF(uint64_t, rb, o);
+            if (!(q & 15) && q != rb && q >= HEAP_BASE && mem_ok(q, 0x400)) shift_near(q, 0x400, 16, p, d);
+        }
+    }
+    add3(pos, d);
+    add3(&VF(float, pinfo, 0x94), d);
+}
+
+static void movement_frame(uint64_t pinfo) {
+    static int hold;
+    static float target[3], last[3];
+    static bool have_last;
+    float *pos = &VF(float, pinfo, 0x88);
+    if (g_cheat_save_slot >= 0) {
+        int i = g_cheat_save_slot;
+        memcpy(slots[i], pos, sizeof slots[i]);
+        g_cheat_slot_set[i] = true;
+        g_cheat_save_slot = -1;
+    }
+    if (g_cheat_go_slot >= 0) {
+        int i = g_cheat_go_slot;
+        if (g_cheat_slot_set[i]) memcpy(target, slots[i], sizeof target), hold = 20;
+        g_cheat_go_slot = -1;
+    }
+    if (hold > 0) {  // (teleporting: brought back to the place every frame for a moment)
+        hold--;
+        float d[3] = {target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]};
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 0.0001f) move_link(pinfo, d);
+        memcpy(last, pos, sizeof last), have_last = true;
+        return;
+    }
+    float k = g_cheat_speed;
+    if (have_last && k > 1.01f && k <= 10) {
+        float d[3] = {pos[0] - last[0], pos[1] - last[1], pos[2] - last[2]};
+        float len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        if (len2 > 1e-6f && len2 < 4) {  // (moving, and not a jump of the game's own: a door, a warp, a reload)
+            float e[3] = {d[0] * (k - 1), d[1] > 0 ? d[1] * (k - 1) : 0, d[2] * (k - 1)};
+            move_link(pinfo, e);
+        }
+    }
+    memcpy(last, pos, sizeof last), have_last = true;
+}
+
 // The game's hour now (0..24), or -1 outside a game.
 float cheats_game_hour(void) {
     float *t = time_of_day();
@@ -195,4 +293,5 @@ void cheats_frame(uint64_t frame) {
         int32_t max = (int32_t)VF(float, pinfo, 0xa0);
         if (life && max > 0 && max <= 40 * 4 && *life > 0 && *life < max) *life = max;
     }
+    movement_frame(pinfo);
 }

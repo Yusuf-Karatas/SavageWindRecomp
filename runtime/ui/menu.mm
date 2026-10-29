@@ -737,6 +737,9 @@ extern "C" volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_
 extern "C" volatile int g_cheat_weather_type, g_cheat_health_state;
 extern "C" volatile bool g_cheat_arrows;
 extern "C" volatile int g_cheat_rupees_set, g_cheat_rupees;
+extern "C" volatile int g_cheat_save_slot, g_cheat_go_slot;
+extern "C" volatile bool g_cheat_slot_set[3];
+extern "C" volatile float g_cheat_speed;
 extern "C" volatile float g_cheat_hour;
 extern "C" float cheats_game_hour(void);
 
@@ -767,6 +770,25 @@ static void tab_cheats(void) {
             g_cheat_rupees_set = rupees;
     } else {
         ImGui::TextDisabled("%s", tr("Rupees: load a game first."));
+    }
+    opt_section("Movement");
+    float speed = g_cheat_speed;
+    if (opt_slider("Speed", &speed, 1, 4, 0.25f, 1, "%gx",
+                   "How fast Link runs, climbs, swims and glides. 1x is the game's own speed. Very high speeds can push "
+                   "Link into walls."))
+        g_cheat_speed = speed;
+    for (int i = 0; i < 3; i++) {
+        char save[64], go[64];
+        snprintf(save, sizeof save, tr("Save place %d"), i + 1);
+        snprintf(go, sizeof go, tr("Teleport to place %d"), i + 1);
+        ImGui::PushID(i);
+        if (opt_button(save, "Remembers where Link stands now. Places are forgotten when Savage Wind closes."))
+            g_cheat_save_slot = i;
+        ImGui::BeginDisabled(!g_cheat_slot_set[i]);
+        if (opt_button(go, "Takes Link back to the saved place. Far places can take a moment to load around him."))
+            g_cheat_go_slot = i;
+        ImGui::EndDisabled();
+        ImGui::PopID();
     }
     opt_section("World");
     bool hold = g_cheat_time;
