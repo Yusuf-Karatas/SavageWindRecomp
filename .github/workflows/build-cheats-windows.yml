@@ -1,0 +1,48 @@
+# Builds savagewind.exe with the Cheats tab for Windows and uploads it as an artifact, with its DLLs, fonts and
+# tools/cheats/play-with-cheats.bat (no game code inside: it uses the swgame.dll your install already built).
+name: Build Windows (Cheats)
+
+on:
+  push:
+    branches: [cheat-menu-pr-ci]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+      # (each step's last lines also go out as annotations: they show on the run's page without opening the logs)
+      - name: Install packages
+        run: |
+          pacman -S --needed --noconfirm make \
+            mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld mingw-w64-ucrt-x86_64-sdl3 \
+            mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader \
+            mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-tools mingw-w64-ucrt-x86_64-pkgconf \
+            mingw-w64-ucrt-x86_64-vulkan-memory-allocator > pacman.log 2>&1 \
+            || { tail -n 15 pacman.log | sed 's/^/::error::/'; exit 1; }
+      - name: Build
+        run: |
+          make -j4 RELEASE=1 build/savagewind.exe > build.log 2>&1 \
+            || { grep -E 'error|Error' build.log | head -n 15 | sed 's/^/::error::/'; tail -n 5 build.log | sed 's/^/::error::/'; exit 1; }
+      - name: Package
+        run: |
+          out="build/cheats/Savage Wind Cheats"
+          mkdir -p "$out"
+          cp build/savagewind.exe build/savagewind.dll.a "$out/"
+          cp third_party/fonts/FiraSans/FiraSans-SemiBold.ttf third_party/fonts/FiraSans/FiraSans-Medium.ttf \
+             third_party/fonts/NotoSansThai/NotoSansThai-Medium.ttf "$out/"
+          cp tools/cheats/play-with-cheats.bat tools/cheats/README.txt "$out/"
+          ldd build/savagewind.exe | awk '/ucrt64/ && !/vulkan-1/ {print $3}' | sort -u | xargs -I{} cp -u {} "$out/"
+          ls "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SavageWind-Cheats-windows
+          path: build/cheats/
