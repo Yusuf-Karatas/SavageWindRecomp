@@ -733,7 +733,8 @@ static void tab_language(bool in_game) {
 // since the last save is lost); B / Esc or Cancel backs out.
 // Cheats (runtime/services/cheats.c): the game's own values in memory, every frame while on. Nothing on disk changes,
 // and every cheat starts off again the next time Savage Wind starts.
-extern "C" volatile bool g_cheat_stamina, g_cheat_time;
+extern "C" volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_weather;
+extern "C" volatile int g_cheat_weather_type, g_cheat_health_state;
 extern "C" volatile float g_cheat_hour;
 extern "C" float cheats_game_hour(void);
 
@@ -744,6 +745,13 @@ static void tab_cheats(void) {
     if (opt_toggle("Infinite stamina", &stamina, false,
                    "The stamina wheel stays full: run, climb, swim and glide as long as you like."))
         g_cheat_stamina = stamina;
+    bool health = g_cheat_health;
+    if (opt_toggle("Infinite health", &health, false,
+                   g_cheat_health_state < 0 ? "Not available: this version of the game keeps Link's health somewhere "
+                                              "the cheat doesn't know."
+                                            : "Your hearts refill at once whenever you take damage. A hit bigger than "
+                                              "all your hearts still knocks you out."))
+        g_cheat_health = health;
     opt_section("World");
     bool hold = g_cheat_time;
     if (opt_toggle("Hold time of day", &hold, false,
@@ -755,6 +763,16 @@ static void tab_cheats(void) {
     if (opt_slider("Hour", &hour, 0, 23, 1, 12, "%g:00",
                    "The hour Hold time of day keeps. Turn Hold time of day on for it to apply."))
         g_cheat_hour = hour;
+    bool wx = g_cheat_weather;
+    if (opt_toggle("Set weather (test)", &wx, false,
+                   "Every region's forecast becomes the weather below. It changes at the next change of weather, which "
+                   "can take a few in-game hours, not at once."))
+        g_cheat_weather = wx;
+    static const char *const wnames[] = {"Clear", "Cloudy", "Rain", "Heavy rain", "Snow", "Heavy snow", "Thunderstorm",
+                                         "Thunder and rain"};
+    int wt = g_cheat_weather_type;
+    if (opt_choice("Weather", &wt, wnames, 8, 0, "The weather Set weather asks for."))
+        g_cheat_weather_type = wt;
     opt_end();
 }
 

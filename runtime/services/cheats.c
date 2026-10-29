@@ -7,6 +7,15 @@
 //
 // Time of day: ksys::world::Manager [world_mgr] (+0x5c0 count, +0x5c8 its managers; [0] = TimeMgr, the time at
 // +0xb8, 0..360 = 24 h), held at g_cheat_hour while on, as test_warp_frame does (runtime/services/test_warp.c).
+//
+// Infinite health: PlayerInfo +0x60 is the player actor and +0xa0 the heart containers in quarter hearts (f32; the
+// BotW decompilation's PlayerInfo layout). PlayerInfo::getLifeFromPlayerActor calls the actor's getLife, vtable +0x2b8
+// (1.9.0: 0x7000cc7184), which returns the life's address: `add x0, x0, #off; ret`. That body is read from the game's
+// code each time the actor changes, so the life (s32, quarter hearts) is only written when it is exactly that.
+//
+// Weather (test): WeatherMgr is world::Manager's managers[3]; its forecasts, 20 climates x 3 time blocks (s32 each), at
+// +0x194. They are only written while every one of them reads as a weather (0..8), so a different layout is left alone.
+// The weather follows the forecast at the next change of time block, not at once.
 #include <stdint.h>
 
 #include "../game_sites.h"
@@ -14,15 +23,52 @@
 
 #define VF(T, base, off) (*(T *)(uintptr_t)((base) + (off)))
 
-volatile bool g_cheat_stamina, g_cheat_time;
+volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_weather;
+volatile int g_cheat_weather_type;  // (WeatherType: 0 clear, 1 cloudy, 2 rain, 3 heavy rain, 4 snow, 5 heavy snow,
+                                    // 6 thunderstorm, 7 thunder rain)
+volatile int g_cheat_health_state;  // 0 not looked yet, 1 found, -1 the game's code isn't what this expects
 volatile float g_cheat_hour = -1;  // (0..24; -1: not set yet - the menu takes the game's hour when Hold goes on)
 
-static float *time_of_day(void) {
+// world::Manager's managers[i] (0 TimeMgr, 3 WeatherMgr), or 0
+static uint64_t world_job(uint32_t i) {
     if (!g_site.world_mgr) return 0;
     uint64_t wm = *(uint64_t *)(uintptr_t)g_site.world_mgr;
-    if (!wm || !VF(uint32_t, wm, 0x5c0)) return 0;
-    uint64_t mgrs = VF(uint64_t, wm, 0x5c8), tm = mgrs ? *(uint64_t *)(uintptr_t)mgrs : 0;
+    if (!wm || VF(uint32_t, wm, 0x5c0) <= i) return 0;
+    uint64_t mgrs = VF(uint64_t, wm, 0x5c8);
+    return mgrs ? VF(uint64_t, mgrs, 8 * i) : 0;
+}
+
+static float *time_of_day(void) {
+    uint64_t tm = world_job(0);
     return tm ? &VF(float, tm, 0xb8) : 0;
+}
+
+static void weather_frame(void) {
+    uint64_t wx = world_job(3);
+    if (!wx) return;
+    int32_t *f = &VF(int32_t, wx, 0x194);
+    for (int i = 0; i < 60; i++)
+        if (f[i] < 0 || f[i] > 8) return;
+    for (int i = 0; i < 60; i++) f[i] = g_cheat_weather_type;
+}
+
+// The player actor's life (quarter hearts), or 0
+static int32_t *player_life(uint64_t actor) {
+    static uint64_t last_vt, off;
+    if (!actor) return 0;
+    uint64_t vt = VF(uint64_t, actor, 0);
+    if (vt != last_vt) {
+        last_vt = vt, off = 0;
+        uint64_t fn = vt ? VF(uint64_t, vt, 0x2b8) : 0;
+        // (the main module's code: from its base up to its .data)
+        if (fn >= 0x7000000000ull && fn < g_site.main_data && !(fn & 3)) {
+            uint32_t add = VF(uint32_t, fn, 0), ret = VF(uint32_t, fn, 4);
+            if ((add & 0xff8003ff) == 0x91000000 && ret == 0xd65f03c0)  // add x0, x0, #imm{, lsl #12}; ret
+                off = (uint64_t)((add >> 10) & 0xfff) << (add & 0x400000 ? 12 : 0);
+        }
+        g_cheat_health_state = off ? 1 : -1;
+    }
+    return off ? &VF(int32_t, actor, off) : 0;
 }
 
 // The game's hour now (0..24), or -1 outside a game.
@@ -37,6 +83,7 @@ void cheats_frame(uint64_t frame) {
         float *t = time_of_day();
         if (t) *t = g_cheat_hour * 15.0f;
     }
+    if (g_cheat_weather) weather_frame();
     static uint64_t last_pinfo;
     static float full;
     if (!g_site.player_info) return;  // (no game code loaded yet)
@@ -46,4 +93,9 @@ void cheats_frame(uint64_t frame) {
     float *stamina = &VF(float, pinfo, 0xa4);
     if (*stamina > full) full = *stamina;
     if (g_cheat_stamina && full > 0 && *stamina < full) *stamina = full;
+    if (g_cheat_health) {
+        int32_t *life = player_life(VF(uint64_t, pinfo, 0x60));
+        int32_t max = (int32_t)VF(float, pinfo, 0xa0);
+        if (life && max > 0 && max <= 40 * 4 && *life > 0 && *life < max) *life = max;
+    }
 }
