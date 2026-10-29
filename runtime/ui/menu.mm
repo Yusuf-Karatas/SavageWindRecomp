@@ -735,6 +735,8 @@ static void tab_language(bool in_game) {
 // and every cheat starts off again the next time Savage Wind starts.
 extern "C" volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_weather;
 extern "C" volatile int g_cheat_weather_type, g_cheat_health_state;
+extern "C" volatile bool g_cheat_arrows, g_cheat_weapons;
+extern "C" volatile int g_cheat_rupees_set, g_cheat_rupees, g_cheat_weapons_state;
 extern "C" volatile float g_cheat_hour;
 extern "C" float cheats_game_hour(void);
 
@@ -752,6 +754,27 @@ static void tab_cheats(void) {
                                             : "Your hearts refill at once whenever you take damage. A hit bigger than "
                                               "all your hearts still knocks you out."))
         g_cheat_health = health;
+    opt_section("Items");
+    bool weapons = g_cheat_weapons;
+    if (opt_toggle("Unbreakable weapons", &weapons, false,
+                   g_cheat_weapons_state < 0
+                       ? "Not found yet: draw your weapon once with this on. If it still breaks, this version of the "
+                         "game keeps the weapon somewhere the cheat doesn't know."
+                       : "The sword, bow and shield you hold keep their durability."))
+        g_cheat_weapons = weapons;
+    bool arrows = g_cheat_arrows;
+    if (opt_toggle("Infinite arrows", &arrows, false, "Shooting doesn't use up arrows of any kind."))
+        g_cheat_arrows = arrows;
+    if (g_cheat_rupees >= 0) {
+        static int rupees = -1;
+        static int shown = -1;
+        if (shown != g_cheat_rupees) rupees = shown = g_cheat_rupees;  // (follows the game unless you change it)
+        if (opt_int("Rupees", &rupees, 0, 999999, 100, 0, "%d",
+                    "How many rupees you have. Left / right change it; hold to go faster."))
+            g_cheat_rupees_set = rupees;
+    } else {
+        ImGui::TextDisabled("%s", tr("Rupees: load a game first."));
+    }
     opt_section("World");
     bool hold = g_cheat_time;
     if (opt_toggle("Hold time of day", &hold, false,
