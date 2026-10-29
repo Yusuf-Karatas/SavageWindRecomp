@@ -735,8 +735,8 @@ static void tab_language(bool in_game) {
 // and every cheat starts off again the next time Savage Wind starts.
 extern "C" volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_weather;
 extern "C" volatile int g_cheat_weather_type, g_cheat_health_state;
-extern "C" volatile bool g_cheat_arrows, g_cheat_weapons;
-extern "C" volatile int g_cheat_rupees_set, g_cheat_rupees, g_cheat_weapons_state;
+extern "C" volatile bool g_cheat_arrows;
+extern "C" volatile int g_cheat_rupees_set, g_cheat_rupees;
 extern "C" volatile float g_cheat_hour;
 extern "C" float cheats_game_hour(void);
 
@@ -755,13 +755,6 @@ static void tab_cheats(void) {
                                               "all your hearts still knocks you out."))
         g_cheat_health = health;
     opt_section("Items");
-    bool weapons = g_cheat_weapons;
-    if (opt_toggle("Unbreakable weapons", &weapons, false,
-                   g_cheat_weapons_state < 0
-                       ? "Not found yet: draw your weapon once with this on. If it still breaks, this version of the "
-                         "game keeps the weapon somewhere the cheat doesn't know."
-                       : "The sword, bow and shield you hold keep their durability."))
-        g_cheat_weapons = weapons;
     bool arrows = g_cheat_arrows;
     if (opt_toggle("Infinite arrows", &arrows, false, "Shooting doesn't use up arrows of any kind."))
         g_cheat_arrows = arrows;

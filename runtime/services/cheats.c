@@ -23,9 +23,6 @@
 //   +0x20 value (count or durability), +0x24 equipped, +0x30 the name's characters (FixedSafeString<64> at +0x28).
 // - ksys::gdt::Manager [0x7001e3b088]: +0xbe0 TriggerParam **; TriggerParam +0x18 its s32 flags (PtrArray: count, then
 //   the pointers at +0x20); FlagS32 +0x18 value, +0x1c crc32 of the name (as getS32ByKey 0x7001137684 reads them).
-// - The weapon in hand is an actor of its own whose life is its durability. Its pointer is looked for in the player
-//   actor, once: an actor whose name (BaseProc +0x10, the characters of mName) is the equipped weapon's, with a
-//   getLife like the player's (above).
 #include <stdint.h>
 #include <string.h>
 
@@ -39,7 +36,7 @@ volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_weather;
 volatile int g_cheat_weather_type;  // (WeatherType: 0 clear, 1 cloudy, 2 rain, 3 heavy rain, 4 snow, 5 heavy snow,
                                     // 6 thunderstorm, 7 thunder rain)
 volatile int g_cheat_health_state;  // 0 not looked yet, 1 found, -1 the game's code isn't what this expects
-volatile bool g_cheat_arrows, g_cheat_weapons;
+volatile bool g_cheat_arrows;
 volatile int g_cheat_rupees_set = -1;  // (the menu asks: write this many rupees next frame)
 volatile int g_cheat_rupees = -1;      // (what the game has, for the menu; -1: not found)
 volatile float g_cheat_hour = -1;  // (0..24; -1: not set yet - the menu takes the game's hour when Hold goes on)
@@ -168,70 +165,6 @@ static bool arrow_item(uint64_t item, void *ctx) {
     return true;
 }
 
-typedef struct { int32_t type; uint64_t item; } FindEquipped;
-static bool equipped_item(uint64_t item, void *ctx) {
-    FindEquipped *e = ctx;
-    if (VF(int32_t, item, 0x18) == e->type && VF(uint8_t, item, 0x24)) { e->item = item; return false; }
-    return true;
-}
-
-// An actor's life, from its getLife (vtable +0x2b8: `add x0, x0, #off; ret`), or 0
-static int32_t *actor_life(uint64_t actor) {
-    if (!mem_ok(actor, 0x200)) return 0;
-    uint64_t vt = VF(uint64_t, actor, 0);
-    if (!mem_ok(vt + 0x2b8, 8)) return 0;
-    uint64_t fn = VF(uint64_t, vt, 0x2b8);
-    if (fn < 0x7000000000ull || fn >= g_site.main_data || (fn & 3)) return 0;
-    uint32_t add = VF(uint32_t, fn, 0), ret = VF(uint32_t, fn, 4);
-    if ((add & 0xff8003ff) != 0x91000000 || ret != 0xd65f03c0) return 0;
-    uint64_t off = (uint64_t)((add >> 10) & 0xfff) << (add & 0x400000 ? 12 : 0);
-    return mem_ok(actor + off, 4) ? &VF(int32_t, actor, off) : 0;
-}
-
-static bool actor_named(uint64_t actor, const char *name) {
-    uint64_t np = VF(uint64_t, actor, 0x10);  // (BaseProc::mName's characters, inside the actor)
-    if (np < actor || np > actor + 0x100 || !mem_ok(np, 64)) return false;
-    return !strncmp((const char *)(uintptr_t)np, name, 63);
-}
-
-volatile int g_cheat_weapons_state;  // 0 not looked yet, 1 found, -1 not found
-
-// The weapon in hand (sword, bow or shield: pouch types 0, 1, 3): held at the highest durability seen
-static void weapon_frame(uint64_t player, int slot, int32_t type) {
-    static uint64_t found_off[4], last_item[4], last_actor[4];
-    static int32_t held[4];
-    static int tries[4];
-    FindEquipped e = {type, 0};
-    pouch_each(equipped_item, &e);
-    if (!e.item) return;
-    const char *name = (const char *)(uintptr_t)VF(uint64_t, e.item, 0x30);
-    if (!mem_ok((uint64_t)(uintptr_t)name, 64)) return;
-    if (e.item != last_item[slot]) last_item[slot] = e.item, tries[slot] = 0;
-    uint64_t actor = 0;
-    if (found_off[slot] && mem_ok(player + found_off[slot], 8)) {
-        actor = VF(uint64_t, player, found_off[slot]);
-        if (!mem_ok(actor, 0x200) || !actor_named(actor, name)) actor = 0;
-    }
-    if (!actor && tries[slot] < 3) {  // (look in the player actor; a few times per weapon, it may not be out yet)
-        tries[slot]++;
-        for (uint64_t o = 0x180; o < 0x8000 && mem_ok(player + o, 8); o += 8) {
-            uint64_t p = VF(uint64_t, player, o);
-            if (p & 7 || !mem_ok(p, 0x200) || !actor_named(p, name) || !actor_life(p)) continue;
-            found_off[slot] = o, actor = p;
-            break;
-        }
-        if (actor) g_cheat_weapons_state = 1;
-        else if (!g_cheat_weapons_state) g_cheat_weapons_state = -1;
-    }
-    if (!actor) return;
-    int32_t *life = actor_life(actor);
-    if (!life) return;
-    if (actor != last_actor[slot]) last_actor[slot] = actor, held[slot] = *life;
-    if (*life > held[slot]) held[slot] = *life;
-    else if (*life > 0 && *life < held[slot]) *life = held[slot];
-    if (VF(int32_t, e.item, 0x20) < held[slot]) VF(int32_t, e.item, 0x20) = held[slot];
-}
-
 // The game's hour now (0..24), or -1 outside a game.
 float cheats_game_hour(void) {
     float *t = time_of_day();
@@ -261,13 +194,5 @@ void cheats_frame(uint64_t frame) {
         int32_t *life = player_life(VF(uint64_t, pinfo, 0x60));
         int32_t max = (int32_t)VF(float, pinfo, 0xa0);
         if (life && max > 0 && max <= 40 * 4 && *life > 0 && *life < max) *life = max;
-    }
-    if (g_cheat_weapons) {
-        uint64_t player = VF(uint64_t, pinfo, 0x60);
-        if (mem_ok(player, 0x200)) {
-            weapon_frame(player, 0, 0);  // sword
-            weapon_frame(player, 1, 1);  // bow
-            weapon_frame(player, 2, 3);  // shield
-        }
     }
 }
