@@ -151,11 +151,11 @@ static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
 // from the game's Options screen.
 extern "C" bool menu_input_captured(void) { return capturing() || game_options_input_hold(); }
 
-// In game the settings are the game's own Options screen (game_options.mm): F1, Esc and the controller's home button no
-// longer open this menu (SAVAGEWIND_OVERLAY=1 brings it back). Esc frees the mouse cursor instead, a click in the
-// window holds it again (runtime/hle/input.c).
+// In game the settings are the game's own Options screen (game_options.mm). This menu stays on F1 and the controller's
+// home button (or Back + Start) for its Cheats tab (SAVAGEWIND_OVERLAY=0 turns it off). Esc frees the mouse cursor, a
+// click in the window holds it again (runtime/hle/input.c).
 static bool overlay_enabled(void) {
-    static const bool on = getenv("SAVAGEWIND_OVERLAY") && *getenv("SAVAGEWIND_OVERLAY") != '0';
+    static const bool on = !getenv("SAVAGEWIND_OVERLAY") || *getenv("SAVAGEWIND_OVERLAY") != '0';
     return on;
 }
 static std::atomic<bool> g_cursor_free{false};
@@ -185,7 +185,7 @@ bool menu_handle_event(const SDL_Event *e) {
     case SDL_EVENT_KEY_DOWN:
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F1 ||
                                (e->key.scancode == SDL_SCANCODE_ESCAPE && !g_open.load()))) {
-            if (!overlay_enabled()) {
+            if (!overlay_enabled() || e->key.scancode == SDL_SCANCODE_ESCAPE) {
                 if (e->key.scancode == SDL_SCANCODE_ESCAPE && !typing) g_cursor_free = !g_cursor_free.load();
                 return true;
             }
@@ -731,6 +731,20 @@ static void tab_language(bool in_game) {
 
 // Quit: back to the start screen (in game: the game reboots to it) or out to the desktop. Each asks first (progress
 // since the last save is lost); B / Esc or Cancel backs out.
+// Cheats (runtime/services/cheats.c): the game's own values in memory, every frame while on. Nothing on disk changes,
+// and every cheat starts off again the next time Savage Wind starts.
+extern "C" volatile bool g_cheat_stamina;
+
+static void tab_cheats(void) {
+    opt_begin("##cheats", ImGui::GetFontSize() / 34);
+    opt_section("Cheats");
+    bool stamina = g_cheat_stamina;
+    if (opt_toggle("Infinite stamina", &stamina, false,
+                   "The stamina wheel stays full: run, climb, swim and glide as long as you like."))
+        g_cheat_stamina = stamina;
+    opt_end();
+}
+
 extern "C" void rt_request_reboot(int kind);  // runtime/main.c (RT_REBOOT_TITLE = 2: the start screen)
 static void tab_quit(float scale, bool in_game) {
     static int ask;  // 0: the two choices; 1: start screen?; 2: desktop?
@@ -904,10 +918,10 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     int ntabs = 0;
     if (prelaunch) tabs[ntabs++] = {"Prelaunch", -1, true};
     // (ids 2-7 were Link's Awakening tabs; the ids stay: test hooks)
-    static const char *names[] = {"Video", "Audio", "Language", "", "", "", "", "", "Controls", "Quit"};
-    static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Language, Quit
-    for (int i : order)  // (Quit: in game only - the start screen has its own QUIT)
-        if (i != 9 || !prelaunch) tabs[ntabs++] = {names[i], i, true};
+    static const char *names[] = {"Video", "Audio", "Language", "", "", "", "", "", "Controls", "Quit", "Cheats"};
+    static const int order[] = {8, 0, 1, 2, 10, 9};  // Controls, Video, Audio, Language, Cheats, Quit
+    for (int i : order)  // (Quit: in game only - the start screen has its own QUIT; Cheats: in game only)
+        if ((i != 9 && i != 10) || !prelaunch) tabs[ntabs++] = {names[i], i, i != 10 || in_game};
     int cur = 0;  // g_tab / g_tab_request hold ids
     for (int i = 0; i < ntabs; i++) if (tabs[i].id == g_tab) cur = i;
     if (!tabs[cur].on) cur = 0;
@@ -987,6 +1001,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 case 2: tab_language(in_game); break;
                 case 8: tab_about(); break;
                 case 9: tab_quit(scale, in_game); break;
+                case 10: tab_cheats(); break;
                 }
                 static const char *scroll_test = getenv("SAVAGEWIND_MENU_SCROLL");  // test hook: page scroll, 0..1
                 if (scroll_test) ImGui::SetScrollY(ImGui::GetScrollMaxY() * (float)atof(scroll_test));
