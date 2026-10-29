@@ -2319,7 +2319,7 @@ const char *maxwell_translator_id(void) { return TRANSLATOR_ID; }
 // Whether a translation depends on more than the binary and the key (debugging switches): not to be cached.
 bool maxwell_translation_uncacheable(void) {
     return maxwell_dbg_code || maxwell_dbg_vs || getenv("SAVAGEWIND_SAVE_MSL") || getenv("SAVAGEWIND_NO_DISCARD") ||
-           getenv("SAVAGEWIND_XLATE_NO_STRUCTURE") || getenv("SAVAGEWIND_NO_CBUF_REACH");
+           getenv("SAVAGEWIND_XLATE_NO_STRUCTURE") || getenv("SAVAGEWIND_CBUF_REACH");
 }
 
 // ---- structured control flow (GLSL). Shaders whose branches nest become if / else and do / while in address order
@@ -2932,8 +2932,11 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         free(c->flow_dead);
     }
     free(label);
-    // SAVAGEWIND_NO_CBUF_REACH=1: register-indexed cbufs are bound whole again, as before cbuf_reach
-    if (!c->fail && info->cbuf_dynamic && !getenv("SAVAGEWIND_NO_CBUF_REACH")) cbuf_reach(c, (const uint64_t *)code, end);
+    // FPS build: register-indexed cbufs are bound whole, as before cbuf_reach (with it, dust and smoke likely vanished at the
+    // end of their effect instead of fading out). SAVAGEWIND_CBUF_REACH=1 bounds them again (testing).
+    static int reach = -1;
+    if (reach < 0) reach = getenv("SAVAGEWIND_CBUF_REACH") && atoi(getenv("SAVAGEWIND_CBUF_REACH"));
+    if (!c->fail && info->cbuf_dynamic && reach) cbuf_reach(c, (const uint64_t *)code, end);
     free(c->writes);
     if (c->fail) { free(c->body.buf); free(c); return info; }
     if (c->glsl) return glsl_finish(c, any_branch, dbg);

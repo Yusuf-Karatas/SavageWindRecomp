@@ -24,7 +24,6 @@ if exist "%GAME_FOLDER%\save" (
 if exist "%GAME_FOLDER%\savagewind.ini" copy /y "%GAME_FOLDER%\savagewind.ini" "%BACKUP%\" >nul
 powershell -NoProfile -Command "Get-ChildItem -Directory '%~dp0save-backups' | Sort-Object Name -Descending | Select-Object -Skip 10 | Remove-Item -Recurse -Force" >nul 2>&1
 set "SAVAGEWIND_DATA_ROOT=%GAME_FOLDER%"
-rem Test launcher: both halves of the speedup off (for the white lines in rain).
-set "SAVAGEWIND_GPU_OVERLAP=0"
-set "SAVAGEWIND_NO_CBUF_REACH=1"
+rem Test launcher: the smaller constant buffer copies back on (the likely cause of dust and smoke vanishing).
+set "SAVAGEWIND_CBUF_REACH=1"
 start "" "%~dp0savagewind.exe"

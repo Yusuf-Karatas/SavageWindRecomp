@@ -24,6 +24,6 @@ if exist "%GAME_FOLDER%\save" (
 if exist "%GAME_FOLDER%\savagewind.ini" copy /y "%GAME_FOLDER%\savagewind.ini" "%BACKUP%\" >nul
 powershell -NoProfile -Command "Get-ChildItem -Directory '%~dp0save-backups' | Sort-Object Name -Descending | Select-Object -Skip 10 | Remove-Item -Recurse -Force" >nul 2>&1
 set "SAVAGEWIND_DATA_ROOT=%GAME_FOLDER%"
-rem Test launcher: only the CPU/GPU overlap off (for the white lines in rain).
+rem Test launcher: only the CPU/GPU overlap off (to test whether it causes a problem).
 set "SAVAGEWIND_GPU_OVERLAP=0"
 start "" "%~dp0savagewind.exe"
