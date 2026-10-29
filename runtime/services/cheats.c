@@ -17,23 +17,10 @@
 // +0x194. They are only written while every one of them reads as a weather (0..8), so a different layout is left alone.
 // The weather follows the forecast at the next change of time block, not at once.
 //
-// Items (1.9.0 only: the two singletons below were found in its main module; tools/game_sites.py doesn't look for them):
+// Infinite arrows (1.9.0 only: the singleton below was found in its main module; tools/game_sites.py doesn't look for it):
 // - uking::ui::PauseMenuDataMgr [0x7001e18570], the inventory: its item list at +0x68 (sead::OffsetList: next node
 //   +0x70, count +0x78, node offset +0x7c), as setEquippedWeaponItemValue walks it. PouchItem: +0x18 type (2 arrows),
 //   +0x20 value (count or durability), +0x24 equipped, +0x30 the name's characters (FixedSafeString<64> at +0x28).
-// - ksys::gdt::Manager [0x7001e3b088]: +0xbe0 TriggerParam **; TriggerParam +0x18 its s32 flags (PtrArray: count, then
-//   the pointers at +0x20); FlagS32 +0x18 value, +0x1c crc32 of the name (as getS32ByKey 0x7001137684 reads them).
-//
-// Movement: Link is moved by shifting every copy of his position by the same amount: PlayerInfo +0x88 / +0x94, the
-// player actor's ksys::act::Actor fields (decompilation layout, which 1.9.0 keeps: its generic getLife is +0x848, right
-// after the 0x840 bytes of Actor) - mMtx +0x398 and *mPhysicsMtx +0x3c8 (their translations), the previous positions
-// from +0x430 - and the physics: mMainBody +0x190 (phys::RigidBody) and the objects it points to (its hkpRigidBody),
-// where every 16-byte aligned vector within 3 m of Link moves with him (position, centre of mass, swept transform).
-// - Teleport: up to 3 saved places; Link is held at the place for 20 frames (longer, he would gather the speed of a
-//   fall while held, and land hard).
-// - Speed: each frame, the way Link went since the frame before (sideways, and upwards - never down, which would only
-//   make falls faster) is added again (multiplier - 1) times.
-#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -48,8 +35,6 @@ volatile int g_cheat_weather_type;  // (WeatherType: 0 clear, 1 cloudy, 2 rain, 
                                     // 6 thunderstorm, 7 thunder rain)
 volatile int g_cheat_health_state;  // 0 not looked yet, 1 found, -1 the game's code isn't what this expects
 volatile bool g_cheat_arrows;
-volatile int g_cheat_rupees_set = -1;  // (the menu asks: write this many rupees next frame)
-volatile int g_cheat_rupees = -1;      // (what the game has, for the menu; -1: not found)
 volatile float g_cheat_hour = -1;  // (0..24; -1: not set yet - the menu takes the game's hour when Hold goes on)
 
 // world::Manager's managers[i] (0 TimeMgr, 3 WeatherMgr), or 0
@@ -102,46 +87,6 @@ static bool mem_ok(uint64_t a, uint64_t n) {
 
 static bool v190(void) { return g_game_version && !strcmp(g_game_version, "1.9.0"); }
 
-static uint32_t crc32_of(const char *p) {
-    uint32_t c = 0xFFFFFFFFu;
-    for (; *p; p++) {
-        c ^= (uint8_t)*p;
-        for (int k = 0; k < 8; k++) c = c >> 1 ^ (0xEDB88320u & -(c & 1));
-    }
-    return ~c;
-}
-
-// The value of the s32 game data flag `name`, or 0
-static int32_t *gdt_s32(const char *name, uint64_t *cache) {
-    if (!v190() || !mem_ok(0x7001e3b088ull, 8)) return 0;
-    uint64_t mgr = VF(uint64_t, 0x7001e3b088ull, 0);
-    if (!mem_ok(mgr + 0xbe0, 8)) return 0;
-    uint64_t pp = VF(uint64_t, mgr, 0xbe0);
-    if (!mem_ok(pp, 8)) return 0;
-    uint64_t tp = VF(uint64_t, pp, 0);
-    if (!mem_ok(tp + 0x18, 0x10)) return 0;
-    uint32_t h = crc32_of(name);
-    if (*cache && mem_ok(*cache, 0x20) && VF(uint32_t, *cache, 0x1c) == h) return &VF(int32_t, *cache, 0x18);
-    *cache = 0;
-    int32_t n = VF(int32_t, tp, 0x18);
-    uint64_t arr = VF(uint64_t, tp, 0x20);
-    if (n <= 0 || n > 100000 || !mem_ok(arr, 8ull * n)) return 0;
-    for (int32_t i = 0; i < n; i++) {
-        uint64_t fl = VF(uint64_t, arr, 8ull * i);
-        if (mem_ok(fl, 0x28) && VF(uint32_t, fl, 0x1c) == h) return *cache = fl, &VF(int32_t, fl, 0x18);
-    }
-    return 0;
-}
-
-static void rupees_frame(void) {
-    static uint64_t cache;
-    int32_t *r = gdt_s32("CurrentRupee", &cache);
-    if (!r) { g_cheat_rupees = -1; return; }
-    int want = g_cheat_rupees_set;
-    if (want >= 0) *r = want > 999999 ? 999999 : want, g_cheat_rupees_set = -1;
-    g_cheat_rupees = *r;
-}
-
 // Each inventory item in turn (f returns false to stop)
 static void pouch_each(bool (*f)(uint64_t item, void *ctx), void *ctx) {
     if (!v190() || !mem_ok(0x7001e18570ull, 8)) return;
@@ -176,93 +121,6 @@ static bool arrow_item(uint64_t item, void *ctx) {
     return true;
 }
 
-volatile int g_cheat_save_slot = -1, g_cheat_go_slot = -1;  // (menu requests, done next frame)
-volatile bool g_cheat_slot_set[3];
-volatile float g_cheat_speed = 1;
-static float slots[3][3];
-
-static bool near3(const float *v, const float *p, float r) {
-    float dx = v[0] - p[0], dy = v[1] - p[1], dz = v[2] - p[2];
-    return isfinite(dx) && isfinite(dy) && isfinite(dz) && dx * dx + dy * dy + dz * dz < r * r;
-}
-
-static void add3(float *v, const float *d) { v[0] += d[0], v[1] += d[1], v[2] += d[2]; }
-
-// Every vector within 3 m of p in [a, a + n), `align` bytes apart, moved by d
-static void shift_near(uint64_t a, uint64_t n, uint64_t align, const float *p, const float *d) {
-    if (!mem_ok(a, n)) return;
-    for (uint64_t o = 0; o + 12 <= n; o += align) {
-        float *v = (float *)(uintptr_t)(a + o);
-        if (near3(v, p, 3)) add3(v, d);
-    }
-}
-
-static void shift_mtx(uint64_t m, const float *p, const float *d) {  // (sead::Matrix34f: translation at +0xc/+0x1c/+0x2c)
-    if (!mem_ok(m, 0x30)) return;
-    float *t[3] = {&VF(float, m, 0xc), &VF(float, m, 0x1c), &VF(float, m, 0x2c)};
-    float v[3] = {*t[0], *t[1], *t[2]};
-    if (!near3(v, p, 3)) return;
-    for (int i = 0; i < 3; i++) *t[i] += d[i];
-}
-
-// Link moved by d (pinfo: PlayerInfo)
-static void move_link(uint64_t pinfo, const float *d) {
-    float *pos = &VF(float, pinfo, 0x88);
-    float p[3] = {pos[0], pos[1], pos[2]};
-    if (!isfinite(p[0]) || !isfinite(p[1]) || !isfinite(p[2])) return;
-    uint64_t actor = VF(uint64_t, pinfo, 0x60);
-    if (!mem_ok(actor, 0x4d0)) return;
-    shift_mtx(actor + 0x398, p, d);
-    uint64_t pm = VF(uint64_t, actor, 0x3c8);
-    if (pm && pm != actor + 0x398) shift_mtx(pm, p, d);
-    shift_near(actor + 0x430, 0x9c, 4, p, d);  // (the previous positions)
-    uint64_t rb = VF(uint64_t, actor, 0x190);
-    if (mem_ok(rb, 0xd0)) {
-        shift_near(rb, 0xd0, 16, p, d);
-        for (uint64_t o = 0; o < 0xd0; o += 8) {
-            uint64_t q = VF(uint64_t, rb, o);
-            if (!(q & 15) && q != rb && q >= HEAP_BASE && mem_ok(q, 0x400)) shift_near(q, 0x400, 16, p, d);
-        }
-    }
-    add3(pos, d);
-    add3(&VF(float, pinfo, 0x94), d);
-}
-
-static void movement_frame(uint64_t pinfo) {
-    static int hold;
-    static float target[3], last[3];
-    static bool have_last;
-    float *pos = &VF(float, pinfo, 0x88);
-    if (g_cheat_save_slot >= 0) {
-        int i = g_cheat_save_slot;
-        memcpy(slots[i], pos, sizeof slots[i]);
-        g_cheat_slot_set[i] = true;
-        g_cheat_save_slot = -1;
-    }
-    if (g_cheat_go_slot >= 0) {
-        int i = g_cheat_go_slot;
-        if (g_cheat_slot_set[i]) memcpy(target, slots[i], sizeof target), hold = 20;
-        g_cheat_go_slot = -1;
-    }
-    if (hold > 0) {  // (teleporting: brought back to the place every frame for a moment)
-        hold--;
-        float d[3] = {target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]};
-        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 0.0001f) move_link(pinfo, d);
-        memcpy(last, pos, sizeof last), have_last = true;
-        return;
-    }
-    float k = g_cheat_speed;
-    if (have_last && k > 1.01f && k <= 10) {
-        float d[3] = {pos[0] - last[0], pos[1] - last[1], pos[2] - last[2]};
-        float len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-        if (len2 > 1e-6f && len2 < 4) {  // (moving, and not a jump of the game's own: a door, a warp, a reload)
-            float e[3] = {d[0] * (k - 1), d[1] > 0 ? d[1] * (k - 1) : 0, d[2] * (k - 1)};
-            move_link(pinfo, e);
-        }
-    }
-    memcpy(last, pos, sizeof last), have_last = true;
-}
-
 // The game's hour now (0..24), or -1 outside a game.
 float cheats_game_hour(void) {
     float *t = time_of_day();
@@ -276,7 +134,6 @@ void cheats_frame(uint64_t frame) {
         if (t) *t = g_cheat_hour * 15.0f;
     }
     if (g_cheat_weather) weather_frame();
-    rupees_frame();
     if (g_cheat_arrows) pouch_each(arrow_item, 0);
     else memset(held_arrows, 0, sizeof held_arrows);
     static uint64_t last_pinfo;
@@ -293,5 +150,4 @@ void cheats_frame(uint64_t frame) {
         int32_t max = (int32_t)VF(float, pinfo, 0xa0);
         if (life && max > 0 && max <= 40 * 4 && *life > 0 && *life < max) *life = max;
     }
-    movement_frame(pinfo);
 }
