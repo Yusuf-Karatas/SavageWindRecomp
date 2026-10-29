@@ -733,7 +733,9 @@ static void tab_language(bool in_game) {
 // since the last save is lost); B / Esc or Cancel backs out.
 // Cheats (runtime/services/cheats.c): the game's own values in memory, every frame while on. Nothing on disk changes,
 // and every cheat starts off again the next time Savage Wind starts.
-extern "C" volatile bool g_cheat_stamina;
+extern "C" volatile bool g_cheat_stamina, g_cheat_time;
+extern "C" volatile float g_cheat_hour;
+extern "C" float cheats_game_hour(void);
 
 static void tab_cheats(void) {
     opt_begin("##cheats", ImGui::GetFontSize() / 34);
@@ -742,6 +744,17 @@ static void tab_cheats(void) {
     if (opt_toggle("Infinite stamina", &stamina, false,
                    "The stamina wheel stays full: run, climb, swim and glide as long as you like."))
         g_cheat_stamina = stamina;
+    opt_section("World");
+    bool hold = g_cheat_time;
+    if (opt_toggle("Hold time of day", &hold, false,
+                   "The clock stops at the hour below. Change the hour to jump to day or night at once.")) {
+        if (hold && g_cheat_hour < 0) g_cheat_hour = cheats_game_hour() >= 0 ? floorf(cheats_game_hour()) : 12;
+        g_cheat_time = hold;
+    }
+    float hour = g_cheat_hour < 0 ? (cheats_game_hour() >= 0 ? floorf(cheats_game_hour()) : 12) : g_cheat_hour;
+    if (opt_slider("Hour", &hour, 0, 23, 1, 12, "%g:00",
+                   "The hour Hold time of day keeps. Turn Hold time of day on for it to apply."))
+        g_cheat_hour = hour;
     opt_end();
 }
 
