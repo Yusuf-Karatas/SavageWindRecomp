@@ -166,9 +166,9 @@ extern "C" bool menu_input_captured(void) {
     return capturing() || game_options_input_hold() || SDL_GetTicks() < g_sizes_hold.load();
 }
 
-// In game the settings are the game's own Options screen (game_options.mm): F1, Esc and the controller's home button no
-// longer open this menu (SAVAGEWIND_OVERLAY=1 brings it back). Esc frees the mouse cursor instead, a click in the
-// window holds it again (runtime/hle/input.c).
+// In game the settings are the game's own Options screen (game_options.mm): only F1 still opens this menu (for its
+// Cheats tab); Esc and the controller's home button no longer do (SAVAGEWIND_OVERLAY=1 brings them back). Esc frees the
+// mouse cursor instead, a click in the window holds it again (runtime/hle/input.c).
 static bool overlay_enabled(void) {
     static const bool on = getenv("SAVAGEWIND_OVERLAY") && *getenv("SAVAGEWIND_OVERLAY") != '0';
     return on;
@@ -200,8 +200,8 @@ bool menu_handle_event(const SDL_Event *e) {
     case SDL_EVENT_KEY_DOWN:
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F1 ||
                                (e->key.scancode == SDL_SCANCODE_ESCAPE && !g_open.load()))) {
-            if (!overlay_enabled()) {
-                if (e->key.scancode == SDL_SCANCODE_ESCAPE && !typing) g_cursor_free = !g_cursor_free.load();
+            if (!overlay_enabled() && e->key.scancode == SDL_SCANCODE_ESCAPE) {
+                if (!typing) g_cursor_free = !g_cursor_free.load();
                 return true;
             }
             if (!typing) set_open(!g_open.load());  // (Esc with the menu open goes to ImGui below: it cancels a field)
@@ -861,6 +861,56 @@ static void tab_language(bool in_game) {
     opt_end();
 }
 
+// Cheats (runtime/services/cheats.c): the game's own values in memory, every frame while on. Nothing on disk changes,
+// and every cheat starts off again the next time Savage Wind starts.
+extern "C" volatile bool g_cheat_stamina, g_cheat_time, g_cheat_health, g_cheat_weather;
+extern "C" volatile int g_cheat_weather_type, g_cheat_health_state;
+extern "C" volatile bool g_cheat_arrows;
+extern "C" volatile float g_cheat_hour;
+extern "C" float cheats_game_hour(void);
+
+static void tab_cheats(void) {
+    opt_begin("##cheats", ImGui::GetFontSize() / 34);
+    opt_section("Cheats");
+    bool stamina = g_cheat_stamina;
+    if (opt_toggle("Infinite stamina", &stamina, false,
+                   "The stamina wheel stays full: run, climb, swim and glide as long as you like."))
+        g_cheat_stamina = stamina;
+    bool health = g_cheat_health;
+    if (opt_toggle("Infinite health", &health, false,
+                   g_cheat_health_state < 0 ? "Not available: this version of the game keeps Link's health somewhere "
+                                              "the cheat doesn't know."
+                                            : "Your hearts refill at once whenever you take damage. A hit bigger than "
+                                              "all your hearts still knocks you out."))
+        g_cheat_health = health;
+    opt_section("Items");
+    bool arrows = g_cheat_arrows;
+    if (opt_toggle("Infinite arrows", &arrows, false, "Shooting doesn't use up arrows of any kind."))
+        g_cheat_arrows = arrows;
+    opt_section("World");
+    bool hold = g_cheat_time;
+    if (opt_toggle("Hold time of day", &hold, false,
+                   "The clock stops at the hour below. Change the hour to jump to day or night at once.")) {
+        if (hold && g_cheat_hour < 0) g_cheat_hour = cheats_game_hour() >= 0 ? floorf(cheats_game_hour()) : 12;
+        g_cheat_time = hold;
+    }
+    float hour = g_cheat_hour < 0 ? (cheats_game_hour() >= 0 ? floorf(cheats_game_hour()) : 12) : g_cheat_hour;
+    if (opt_slider("Hour", &hour, 0, 23, 1, 12, "%g:00",
+                   "The hour Hold time of day keeps. Turn Hold time of day on for it to apply."))
+        g_cheat_hour = hour;
+    bool wx = g_cheat_weather;
+    if (opt_toggle("Set weather", &wx, false,
+                   "Every region's forecast becomes the weather below. It changes at the next change of weather, which "
+                   "can take a few in-game hours, not at once."))
+        g_cheat_weather = wx;
+    static const char *const wnames[] = {"Clear", "Cloudy", "Rain", "Heavy rain", "Snow", "Heavy snow", "Thunderstorm",
+                                         "Thunder and rain"};
+    int wt = g_cheat_weather_type;
+    if (opt_choice("Weather", &wt, wnames, 8, 0, "The weather Set weather asks for."))
+        g_cheat_weather_type = wt;
+    opt_end();
+}
+
 // Quit: back to the start screen (in game: the game reboots to it) or out to the desktop. Each asks first (progress
 // since the last save is lost); B / Esc or Cancel backs out.
 extern "C" void rt_request_reboot(int kind);  // runtime/main.c (RT_REBOOT_TITLE = 2: the start screen)
@@ -1118,10 +1168,10 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     int ntabs = 0;
     if (prelaunch) tabs[ntabs++] = {"Prelaunch", -1, true};
     // (ids 2-7 were Link's Awakening tabs; the ids stay: test hooks)
-    static const char *names[] = {"Video", "Audio", "Language", "", "", "", "", "", "Controls", "Quit"};
-    static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Language, Quit
-    for (int i : order)  // (Quit: in game only - the start screen has its own QUIT)
-        if (i != 9 || !prelaunch) tabs[ntabs++] = {names[i], i, true};
+    static const char *names[] = {"Video", "Audio", "Language", "", "", "", "", "", "Controls", "Quit", "Cheats"};
+    static const int order[] = {8, 0, 1, 2, 10, 9};  // Controls, Video, Audio, Language, Cheats, Quit
+    for (int i : order)  // (Quit: in game only - the start screen has its own QUIT; Cheats: in game only)
+        if ((i != 9 && i != 10) || !prelaunch) tabs[ntabs++] = {names[i], i, i != 10 || in_game};
     int cur = 0;  // g_tab / g_tab_request hold ids
     for (int i = 0; i < ntabs; i++) if (tabs[i].id == g_tab) cur = i;
     if (!tabs[cur].on) cur = 0;
@@ -1201,6 +1251,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 case 2: tab_language(in_game); break;
                 case 8: tab_about(); break;
                 case 9: tab_quit(scale, in_game); break;
+                case 10: tab_cheats(); break;
                 }
                 static const char *scroll_test = getenv("SAVAGEWIND_MENU_SCROLL");  // test hook: page scroll, 0..1
                 if (scroll_test) ImGui::SetScrollY(ImGui::GetScrollMaxY() * (float)atof(scroll_test));
