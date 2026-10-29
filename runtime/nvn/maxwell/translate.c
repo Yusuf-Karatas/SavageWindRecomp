@@ -1450,7 +1450,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (wcc3) sp(&c->body, "      cc = uint(sum >> 32) & 1u;\n");
             if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = uint(sum);\n", d); }
             sp(&c->body, "    }\n");
-        } else if (OPM(0x5cc0000000000000ull, 0xfff0000000000000ull) && bits(w, 31, 8)) {
+        } else if (OPM(0x5cc0000000000000ull, 0xfff0000000000000ull) && bits(w, 31, 8) &&
+                   !getenv("SAVAGEWIND_NO_IADD3_SHIFT")) {  // (SAVAGEWIND_NO_IADD3_SHIFT=1: as 0.3.1, testing)
             // register form with a shift or half selects: .RS / .LS (bits 37-38) shift the first two operands' sum
             // 16 bits right / left before the third is added; bits 35-36, 33-34, 31-32 pick a / b / c's low or high
             // half (1 low, 2 high). The compiler's division by a constant (x * 0xcccccccd's high word, then >> 2)
@@ -2319,7 +2320,8 @@ const char *maxwell_translator_id(void) { return TRANSLATOR_ID; }
 // Whether a translation depends on more than the binary and the key (debugging switches): not to be cached.
 bool maxwell_translation_uncacheable(void) {
     return maxwell_dbg_code || maxwell_dbg_vs || getenv("SAVAGEWIND_SAVE_MSL") || getenv("SAVAGEWIND_NO_DISCARD") ||
-           getenv("SAVAGEWIND_XLATE_NO_STRUCTURE") || getenv("SAVAGEWIND_CBUF_REACH");
+           getenv("SAVAGEWIND_XLATE_NO_STRUCTURE") || getenv("SAVAGEWIND_CBUF_REACH") ||
+           getenv("SAVAGEWIND_NO_IADD3_SHIFT");
 }
 
 // ---- structured control flow (GLSL). Shaders whose branches nest become if / else and do / while in address order

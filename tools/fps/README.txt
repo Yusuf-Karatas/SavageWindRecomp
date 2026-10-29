@@ -16,6 +16,8 @@ goes wrong, close the game and copy a backup's "save" folder back into your Sava
 Test launchers: test-overlap-off.bat turns the CPU/GPU overlap (the bigger half of the speedup) off.
 test-cbuf-on.bat turns the smaller constant buffer copies back on: they are off in this build, the likely cause of
 dust and smoke vanishing at the end of their effect instead of fading.
+test-iadd3-off.bat turns a shader fix from the same release off; test-readback-full.bat turns the
+stutter fix off. Each one changes one thing, to find which change causes a problem.
 
 Your Savage Wind folder is used as it is: nothing there is replaced. To play without the boost, start
 the original savagewind.exe as usual.
