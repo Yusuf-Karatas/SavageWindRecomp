@@ -13,7 +13,7 @@
 // (1.9.0: 0x7000cc7184), which returns the life's address: `add x0, x0, #off; ret`. That body is read from the game's
 // code each time the actor changes, so the life (s32, quarter hearts) is only written when it is exactly that.
 //
-// Weather (test): WeatherMgr is world::Manager's managers[3]; its forecasts, 20 climates x 3 time blocks (s32 each), at
+// Weather: WeatherMgr is world::Manager's managers[3]; its forecasts, 20 climates x 3 time blocks (s32 each), at
 // +0x194. They are only written while every one of them reads as a weather (0..8), so a different layout is left alone.
 // The weather follows the forecast at the next change of time block, not at once.
 //

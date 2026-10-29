@@ -24,6 +24,9 @@ static int g_indent;
 static bool g_focus_req, g_take_first;  // (opt_focus_first: requested / this page's first row takes it)
 void opt_focus_first(bool on) { g_focus_req = on; }
 static bool g_held;  // the last row's left / right has been held a while (steppers go faster)
+static float g_value_w;  // the next arrow row's value width: its widest value, so the arrows stay put as it changes
+
+static float text_w(const char *t) { return ImGui::CalcTextSize(t).x; }
 void opt_indent(int step) { g_indent = g_indent + step < 0 ? 0 : g_indent + step; }
 
 void opt_begin(const char *id, float scale) {
@@ -103,7 +106,8 @@ static int row(const char *label, const std::string &value, bool changed, const 
     float right = p.x + w - pad;  // (the value's right edge)
     if (arrows && !value.empty()) {  // ◀ value ▶, drawn (the fonts have no arrow glyphs); a click on one steps
         float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
-        float rx = right - aw, lx = rx - gap - ImGui::CalcTextSize(value.c_str()).x - gap - aw;
+        float vw = fmaxf(text_w(value.c_str()), g_value_w);
+        float rx = right - aw, lx = rx - gap - vw - gap - aw;
         ImU32 ac = off ? IM_COL32(110, 110, 100, 255) : hov || foc ? kGold : IM_COL32(170, 170, 160, 255);
         dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
         dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
@@ -112,10 +116,11 @@ static int row(const char *label, const std::string &value, bool changed, const 
             if (mx >= lx - hit && mx <= lx + aw + hit) step = -1;
             else if (mx >= rx - hit && mx <= rx + aw + hit) step = 1;
         }
-        right = rx - gap;
+        right = rx - gap - (vw - text_w(value.c_str())) * 0.5f;  // (the value centred between the arrows)
     }
+    g_value_w = 0;
     if (!value.empty()) {
-        float vw = ImGui::CalcTextSize(value.c_str()).x, vx = right - vw;
+        float vw = text_w(value.c_str()), vx = right - vw;
         dl->AddText(ImVec2(vx, ty), dim ? IM_COL32(110, 110, 102, 255) : changed ? IM_COL32(255, 255, 255, 255)
                                                                                  : IM_COL32(205, 205, 195, 255), value.c_str());
     }
@@ -131,6 +136,7 @@ bool opt_toggle(const char *label, bool *v, bool def, const char *desc) {
 
 bool opt_choice(const char *label, int *v, const char *const *names, int n, int def, const char *desc, bool wrap) {
     int cur = *v >= 0 && *v < n ? *v : 0;
+    for (int i = 0; i < n; i++) g_value_w = fmaxf(g_value_w, text_w(tr(names[i])));
     int step = row(label, tr(names[cur]), cur != def, desc, true, true);
     if (!step) return false;
     int nv = cur + (step == 2 ? 1 : step);
@@ -146,6 +152,7 @@ bool opt_choice_avail(const char *label, int *v, int *shown, const char *const *
     if (*shown < 0 || *shown >= n || (avail[*shown] && *shown != cur)) *shown = cur;  // (changed elsewhere)
     int s = *shown;
     g_value_dim = !avail[s];
+    for (int i = 0; i < n; i++) g_value_w = fmaxf(g_value_w, text_w(tr(names[i])));
     int step = row(label, tr(names[s]), s != def, desc, true, true);
     if (!step) return false;
     s = (s + (step == 2 ? 1 : step) + n) % n;
@@ -157,7 +164,11 @@ bool opt_choice_avail(const char *label, int *v, int *shown, const char *const *
 
 bool opt_slider(const char *label, float *v, float lo, float hi, float step, float def, const char *fmt, const char *desc) {
     char buf[32];
+    if (step > 0 && (hi - lo) / step <= 400)  // (every value it can take)
+        for (float x = lo; x <= hi + step * 0.01f; x += step)
+            snprintf(buf, sizeof buf, tr(fmt), x), g_value_w = fmaxf(g_value_w, text_w(buf));
     snprintf(buf, sizeof buf, tr(fmt), *v);
+    g_value_w = fmaxf(g_value_w, text_w(buf));
     int s = row(label, buf, fabsf(*v - def) > step * 0.01f, desc, true, true);
     if (!s) return false;
     float eps = step * 0.01f, n = roundf(*v / step) * step + (s == 2 ? step : s * step);
@@ -169,6 +180,11 @@ bool opt_slider(const char *label, float *v, float lo, float hi, float step, flo
 bool opt_int(const char *label, int *v, int lo, int hi, int step, int def, const char *fmt, const char *desc,
              const char *lo_name) {
     char buf[48];
+    if (lo_name) g_value_w = text_w(tr(lo_name));
+    if (step > 0 && (hi - lo) / step <= 400)  // (every value it can take; else the ends)
+        for (int x = lo; x <= hi; x += step) snprintf(buf, sizeof buf, tr(fmt), x), g_value_w = fmaxf(g_value_w, text_w(buf));
+    else
+        for (int x : {lo, hi}) snprintf(buf, sizeof buf, tr(fmt), x), g_value_w = fmaxf(g_value_w, text_w(buf));
     if (lo_name && *v == lo) snprintf(buf, sizeof buf, "%s", tr(lo_name));
     else snprintf(buf, sizeof buf, tr(fmt), *v);
     int s = row(label, buf, *v != def, desc, true, true);

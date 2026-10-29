@@ -769,7 +769,7 @@ static void tab_cheats(void) {
                    "The hour Hold time of day keeps. Turn Hold time of day on for it to apply."))
         g_cheat_hour = hour;
     bool wx = g_cheat_weather;
-    if (opt_toggle("Set weather (test)", &wx, false,
+    if (opt_toggle("Set weather", &wx, false,
                    "Every region's forecast becomes the weather below. It changes at the next change of weather, which "
                    "can take a few in-game hours, not at once."))
         g_cheat_weather = wx;
